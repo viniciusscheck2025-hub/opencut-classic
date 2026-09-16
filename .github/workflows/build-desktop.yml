@@ -1,0 +1,130 @@
+# ============================================================================
+# build-desktop.yml
+#
+# Builda o app desktop do OpenCut Classic (apps/desktop, Rust + GPUI) para
+# Windows, macOS e Linux, e disponibiliza os executáveis como artifacts.
+# Se um tag "v*" for empurrado, também cria uma Release no GitHub com os
+# zips anexados.
+#
+# COMO USAR:
+#   1. Salve este arquivo em: .github/workflows/build-desktop.yml
+#      (na raiz do seu clone/fork do opencut-classic)
+#   2. Ajuste as duas variáveis abaixo se necessário:
+#      - PACKAGE_NAME: nome do pacote Rust em apps/desktop/Cargo.toml
+#                       (campo `[package] name = "..."`)
+#      - BIN_NAME:     nome do binário gerado (geralmente igual ao package,
+#                       veja `[[bin]] name = "..."` se existir)
+#   3. Commit + push. Rode manualmente pela aba Actions > "Build Desktop"
+#      > "Run workflow", ou empurre uma tag `vX.Y.Z` para gerar uma Release.
+#
+# NOTA: o app desktop estava marcado como "in progress" quando o repositório
+# foi arquivado. Se o build falhar, o erro provavelmente é do próprio código
+# (dependências incompletas), não deste workflow. Veja o log de cada job.
+# ============================================================================
+
+name: Build Desktop
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "v*"
+
+env:
+  PACKAGE_NAME: opencut-desktop   # <-- ajuste se o nome do pacote for outro
+  BIN_NAME: opencut-desktop       # <-- ajuste se o nome do binário for outro
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            artifact_ext: ""
+          - os: macos-latest
+            platform: macos
+            artifact_ext: ""
+          - os: windows-latest
+            platform: windows
+            artifact_ext: ".exe"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/desktop"
+
+      # GPUI (framework do Zed) precisa dessas libs de sistema no Linux
+      # para compilar (X11/Wayland, fontconfig, OpenSSL, ALSA, etc).
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev \
+            pkg-config \
+            libfontconfig1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libasound2-dev \
+            libvulkan1 \
+            mesa-vulkan-drivers
+
+      - name: Build (release)
+        working-directory: apps/desktop
+        run: cargo build --release --package "${{ env.PACKAGE_NAME }}"
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          SRC="apps/desktop/target/release/${{ env.BIN_NAME }}${{ matrix.artifact_ext }}"
+          if [ ! -f "$SRC" ]; then
+            echo "Binário não encontrado em $SRC"
+            echo "Verifique PACKAGE_NAME / BIN_NAME no topo do workflow."
+            ls -R apps/desktop/target/release || true
+            exit 1
+          fi
+          cp "$SRC" "dist/"
+          cd dist
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            7z a "opencut-desktop-${{ matrix.platform }}.zip" "${{ env.BIN_NAME }}${{ matrix.artifact_ext }}"
+          else
+            zip "opencut-desktop-${{ matrix.platform }}.zip" "${{ env.BIN_NAME }}${{ matrix.artifact_ext }}"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencut-desktop-${{ matrix.platform }}
+          path: dist/opencut-desktop-${{ matrix.platform }}.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.zip
+          generate_release_notes: true
