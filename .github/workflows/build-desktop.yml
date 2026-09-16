@@ -31,8 +31,8 @@ on:
       - "v*"
 
 env:
-  PACKAGE_NAME: opencut-desktop   # <-- ajuste se o nome do pacote for outro
-  BIN_NAME: opencut-desktop       # <-- ajuste se o nome do binário for outro
+  PACKAGE_NAME: opencut-desktop   # confirmado em apps/desktop/Cargo.toml [package]
+  BIN_NAME: opencut               # confirmado em apps/desktop/Cargo.toml [[bin]]
 
 jobs:
   build:
@@ -62,7 +62,7 @@ jobs:
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "apps/desktop"
+          workspaces: "."   # workspace Cargo raiz do repo (ver [workspace] no Cargo.toml)
 
       # GPUI (framework do Zed) precisa dessas libs de sistema no Linux
       # para compilar (X11/Wayland, fontconfig, OpenSSL, ALSA, etc).
@@ -83,19 +83,20 @@ jobs:
             libvulkan1 \
             mesa-vulkan-drivers
 
+      # Roda a partir da raiz do repo: apps/desktop é membro do workspace
+      # Cargo raiz (não tem Cargo.toml de workspace próprio).
       - name: Build (release)
-        working-directory: apps/desktop
         run: cargo build --release --package "${{ env.PACKAGE_NAME }}"
 
       - name: Package artifact
         shell: bash
         run: |
           mkdir -p dist
-          SRC="apps/desktop/target/release/${{ env.BIN_NAME }}${{ matrix.artifact_ext }}"
+          SRC="target/release/${{ env.BIN_NAME }}${{ matrix.artifact_ext }}"
           if [ ! -f "$SRC" ]; then
             echo "Binário não encontrado em $SRC"
             echo "Verifique PACKAGE_NAME / BIN_NAME no topo do workflow."
-            ls -R apps/desktop/target/release || true
+            ls -R target/release || true
             exit 1
           fi
           cp "$SRC" "dist/"
